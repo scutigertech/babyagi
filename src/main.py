@@ -233,7 +233,7 @@ def execution_agent(objective: str, task: str) -> str:
 def context_agent(query: str, n: int):
     query_embedding = get_ada_embedding(query)
     #results = index.query(query_embedding, top_k=n, include_metadata=True, namespace=OBJECTIVE)
-    results = {"metadatas":[]}
+    results = {"metadatas":[[]]}
     count = index.count()
     if count!=0:
         n_results = count if n>count else n
