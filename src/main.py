@@ -7,9 +7,6 @@ from typing import Dict, List
 import importlib
 
 import openai
-#import pinecone
-import chromadb
-from chromadb.config import Settings
 
 from dotenv import load_dotenv
 
@@ -32,13 +29,22 @@ if "gpt-4" in OPENAI_API_MODEL.lower():
         + "\033[0m\033[0m"
     )
 
-#PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
-#assert PINECONE_API_KEY, "PINECONE_API_KEY environment variable is missing from .env"
 
-#PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT", "")
-#assert (
-#    PINECONE_ENVIRONMENT
-#), "PINECONE_ENVIRONMENT environment variable is missing from .env"
+ENABLE_PINECONE = os.getenv("ENABLE_PINECONE", "").lower()=="true"
+if ENABLE_PINECONE:
+    import pinecone
+    PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
+    assert PINECONE_API_KEY, "PINECONE_API_KEY environment variable is missing from .env"
+
+    PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT", "")
+    assert (
+        PINECONE_ENVIRONMENT
+    ), "PINECONE_ENVIRONMENT environment variable is missing from .env"
+else:
+    import chromadb
+    from chromadb.config import Settings
+    CHROMADB_DIR = os.getenv("CHROMADB_DIR", "/tmp/")
+
 
 # Table config
 YOUR_TABLE_NAME = os.getenv("TABLE_NAME", "")
@@ -104,23 +110,24 @@ print("\033[93m\033[1m" + "\nInitial task:" + "\033[0m\033[0m" + f" {INITIAL_TAS
 
 # Configure OpenAI and Pinecone
 openai.api_key = OPENAI_API_KEY
-#pinecone.init(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
 
-client = chromadb.Client(Settings(chroma_db_impl="duckdb+parquet",persist_directory="/tmp/"))
 
-# Create Pinecone index
-#table_name = YOUR_TABLE_NAME
-#dimension = 1536
-#metric = "cosine"
-#pod_type = "p1"
-#if table_name not in pinecone.list_indexes():
-#    pinecone.create_index(
-#        table_name, dimension=dimension, metric=metric, pod_type=pod_type
-#    )
-# Connect to the index
-#index = pinecone.Index(table_name)
-
-index = client.get_or_create_collection(name=YOUR_TABLE_NAME)
+if ENABLE_PINECONE:
+    pinecone.init(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
+    # Create Pinecone index
+    table_name = YOUR_TABLE_NAME
+    dimension = 1536
+    metric = "cosine"
+    pod_type = "p1"
+    if table_name not in pinecone.list_indexes():
+        pinecone.create_index(
+            table_name, dimension=dimension, metric=metric, pod_type=pod_type
+        )
+    # Connect to the index
+    index = pinecone.Index(table_name)
+else:
+    client = chromadb.Client(Settings(chroma_db_impl="duckdb+parquet",persist_directory=CHROMADB_DIR))
+    index = client.get_or_create_collection(name=YOUR_TABLE_NAME)
 
 # Task list
 task_list = deque([])
@@ -232,17 +239,15 @@ def execution_agent(objective: str, task: str) -> str:
 
 def context_agent(query: str, n: int):
     query_embedding = get_ada_embedding(query)
-    #results = index.query(query_embedding, top_k=n, include_metadata=True, namespace=OBJECTIVE)
+    if ENABLE_PINECONE:
+        results = index.query(query_embedding, top_k=n, include_metadata=True, namespace=OBJECTIVE)
+        sorted_results = sorted(results.matches, key=lambda x: x.score, reverse=True)
+        return [(str(item.metadata["task"])) for item in sorted_results]
     results = {"metadatas":[[]]}
     count = index.count()
     if count!=0:
         n_results = count if n>count else n
-        print(n_results,count)
         results = index.query(query_embeddings=[query_embedding], n_results=n_results)
-    print("***** RESULTS *****")
-    print(results)
-    #sorted_results = sorted(results.matches, key=lambda x: x.score, reverse=True)
-    #return [(str(item.metadata["task"])) for item in sorted_results]
     return [ item["task"] for item in results["metadatas"][0]]
 
 # Add the first task
@@ -277,14 +282,13 @@ while True:
         vector = get_ada_embedding(
             enriched_result["data"]
         )  # get vector of the actual result extracted from the dictionary
-        
-        #index.upsert(
-        #    [(result_id, vector, {"task": task["task_name"], "result": result})],
-	    #namespace=OBJECTIVE
-        #)
-        index.add(embeddings=[vector],documents=[result],metadatas=[{"task": task["task_name"], "result": result}],ids=[result_id])
-        # update items in a collection
-        # index.update()
+        if ENABLE_PINECONE:
+            index.upsert(
+                [(result_id, vector, {"task": task["task_name"], "result": result})],
+	        namespace=OBJECTIVE
+            )
+        else:
+            index.add(embeddings=[vector],documents=[result],metadatas=[{"task": task["task_name"], "result": result}],ids=[result_id])
         # Step 3: Create new tasks and reprioritize task list
         new_tasks = task_creation_agent(
             OBJECTIVE,
