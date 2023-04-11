@@ -13,6 +13,8 @@ pinecone-client = "2.2.1"
 pre-commit = ">=3.2.0"
 python-dotenv = "1.0.0"
 chromadb = "^0.3.21"
+black = "^23.3.0"
+pyllamacpp = "^1.0.6"
 
 
 [build-system]

@@ -6,35 +6,45 @@ from collections import deque
 from typing import Dict, List
 import importlib
 
-import openai
-
 from dotenv import load_dotenv
 
 # Load default environment variables (.env)
 load_dotenv()
 
 # Engine configuration
-
 # API Keys
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-assert OPENAI_API_KEY, "OPENAI_API_KEY environment variable is missing from .env"
+ENABLE_OPENAI = os.getenv("ENABLE_OPENAI", "").lower() == "true"
+if ENABLE_OPENAI:
+    import openai
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    assert OPENAI_API_KEY, "OPENAI_API_KEY environment variable is missing from .env"
 
-OPENAI_API_MODEL = os.getenv("OPENAI_API_MODEL", "gpt-3.5-turbo")
-assert OPENAI_API_MODEL, "OPENAI_API_MODEL environment variable is missing from .env"
+    OPENAI_API_MODEL = os.getenv("OPENAI_API_MODEL", "gpt-3.5-turbo")
+    assert OPENAI_API_MODEL, "OPENAI_API_MODEL environment variable is missing from .env"
 
-if "gpt-4" in OPENAI_API_MODEL.lower():
-    print(
-        "\033[91m\033[1m"
-        + "\n*****USING GPT-4. POTENTIALLY EXPENSIVE. MONITOR YOUR COSTS*****"
-        + "\033[0m\033[0m"
-    )
+    if "gpt-4" in OPENAI_API_MODEL.lower():
+        print(
+            "\033[91m\033[1m"
+            + "\n*****USING GPT-4. POTENTIALLY EXPENSIVE. MONITOR YOUR COSTS*****"
+            + "\033[0m\033[0m"
+       )
+    openai.api_key = OPENAI_API_KEY
+else:
+    from pyllamacpp.model import Model
+    GGML_MODEL_PATH = os.getenv("GGML_MODEL_PATH", "")
+    llm_model = Model(ggml_model=GGML_MODEL_PATH, n_ctx=512)
+    from sentence_transformers import SentenceTransformer
+    EMBEDDER_MODEL = os.getenv("EMBEDDER_MODEL", "")
+    embedder = SentenceTransformer(EMBEDDER_MODEL) # all-mpnet-base-v2
 
-
-ENABLE_PINECONE = os.getenv("ENABLE_PINECONE", "").lower()=="true"
+ENABLE_PINECONE = os.getenv("ENABLE_PINECONE", "").lower() == "true"
 if ENABLE_PINECONE:
     import pinecone
+
     PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
-    assert PINECONE_API_KEY, "PINECONE_API_KEY environment variable is missing from .env"
+    assert (
+        PINECONE_API_KEY
+    ), "PINECONE_API_KEY environment variable is missing from .env"
 
     PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT", "")
     assert (
@@ -43,6 +53,7 @@ if ENABLE_PINECONE:
 else:
     import chromadb
     from chromadb.config import Settings
+
     CHROMADB_DIR = os.getenv("CHROMADB_DIR", "/tmp/")
 
 
@@ -56,6 +67,7 @@ INITIAL_TASK = os.getenv("INITIAL_TASK", os.getenv("FIRST_TASK", ""))
 
 
 # Extensions support begin
+
 
 def can_import(module_name):
     try:
@@ -95,22 +107,11 @@ if DOTENV_EXTENSIONS:
 assert OBJECTIVE, "OBJECTIVE environment variable is missing from .env"
 assert INITIAL_TASK, "INITIAL_TASK environment variable is missing from .env"
 
-if "gpt-4" in OPENAI_API_MODEL.lower():
-    print(
-        "\033[91m\033[1m"
-        + "\n*****USING GPT-4. POTENTIALLY EXPENSIVE. MONITOR YOUR COSTS*****"
-        + "\033[0m\033[0m"
-    )
-
 # Print OBJECTIVE
 print("\033[94m\033[1m" + "\n*****OBJECTIVE*****\n" + "\033[0m\033[0m")
 print(f"{OBJECTIVE}")
 
 print("\033[93m\033[1m" + "\nInitial task:" + "\033[0m\033[0m" + f" {INITIAL_TASK}")
-
-# Configure OpenAI and Pinecone
-openai.api_key = OPENAI_API_KEY
-
 
 if ENABLE_PINECONE:
     pinecone.init(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
@@ -126,7 +127,9 @@ if ENABLE_PINECONE:
     # Connect to the index
     index = pinecone.Index(table_name)
 else:
-    client = chromadb.Client(Settings(chroma_db_impl="duckdb+parquet",persist_directory=CHROMADB_DIR))
+    client = chromadb.Client(
+        Settings(chroma_db_impl="duckdb+parquet", persist_directory=CHROMADB_DIR)
+    )
     index = client.get_or_create_collection(name=YOUR_TABLE_NAME)
 
 # Task list
@@ -139,55 +142,54 @@ def add_task(task: Dict):
 
 def get_ada_embedding(text):
     text = text.replace("\n", " ")
-    return openai.Embedding.create(input=[text], model="text-embedding-ada-002")[
-        "data"
-    ][0]["embedding"]
+    if ENABLE_OPENAI:
+        return openai.Embedding.create(input=[text], model="text-embedding-ada-002")["data"][0]["embedding"]
+    return embedder.encode(text)
 
 
 def openai_call(
     prompt: str,
-    model: str = OPENAI_API_MODEL,
     temperature: float = 0.5,
     max_tokens: int = 100,
 ):
     while True:
-        try:
-            if model.startswith("llama"):
-                # Spawn a subprocess to run llama.cpp
-                cmd = cmd = ["llama/main", "-p", prompt]
-                result = subprocess.run(cmd, shell=True, stderr=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
-                return result.stdout.strip()
-            elif not model.startswith("gpt-"):
-                # Use completion API
-                response = openai.Completion.create(
-                    engine=model,
-                    prompt=prompt,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    top_p=1,
-                    frequency_penalty=0,
-                    presence_penalty=0,
+        if ENABLE_OPENAI:
+            try:
+                    model = OPENAI_API_MODEL
+                    if not model.startswith("gpt-"):
+                        # Use completion API
+                        response = openai.Completion.create(
+                            engine=model,
+                            prompt=prompt,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            top_p=1,
+                            frequency_penalty=0,
+                            presence_penalty=0,
+                        )
+                        return response.choices[0].text.strip()
+                    else:
+                        # Use chat completion API
+                        messages = [{"role": "user", "content": prompt}]
+                        response = openai.ChatCompletion.create(
+                            model=model,
+                            messages=messages,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            n=1,
+                            stop=None,
+                        )
+                        return response.choices[0].message.content.strip()
+            except openai.error.RateLimitError:
+                print(
+                    "The OpenAI API rate limit has been exceeded. Waiting 10 seconds and trying again."
                 )
-                return response.choices[0].text.strip()
+                time.sleep(10)  # Wait 10 seconds and try again
             else:
-                # Use chat completion API
-                messages = [{"role": "user", "content": prompt}]
-                response = openai.ChatCompletion.create(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    n=1,
-                    stop=None,
-                )
-                return response.choices[0].message.content.strip()
-        except openai.error.RateLimitError:
-            print(
-                "The OpenAI API rate limit has been exceeded. Waiting 10 seconds and trying again."
-            )
-            time.sleep(10)  # Wait 10 seconds and try again
+                break
         else:
-            break
+            response = llm_model.generate(prompt, temp=temperature, n_predict=max_tokens)
+            return response
 
 
 def task_creation_agent(
@@ -240,15 +242,18 @@ def execution_agent(objective: str, task: str) -> str:
 def context_agent(query: str, n: int):
     query_embedding = get_ada_embedding(query)
     if ENABLE_PINECONE:
-        results = index.query(query_embedding, top_k=n, include_metadata=True, namespace=OBJECTIVE)
+        results = index.query(
+            query_embedding, top_k=n, include_metadata=True, namespace=OBJECTIVE
+        )
         sorted_results = sorted(results.matches, key=lambda x: x.score, reverse=True)
         return [(str(item.metadata["task"])) for item in sorted_results]
-    results = {"metadatas":[[]]}
+    results = {"metadatas": [[]]}
     count = index.count()
-    if count!=0:
-        n_results = count if n>count else n
+    if count != 0:
+        n_results = count if n > count else n
         results = index.query(query_embeddings=[query_embedding], n_results=n_results)
-    return [ item["task"] for item in results["metadatas"][0]]
+    return [item["task"] for item in results["metadatas"][0]]
+
 
 # Add the first task
 first_task = {"task_id": 1, "task_name": INITIAL_TASK}
@@ -285,10 +290,15 @@ while True:
         if ENABLE_PINECONE:
             index.upsert(
                 [(result_id, vector, {"task": task["task_name"], "result": result})],
-	        namespace=OBJECTIVE
+                namespace=OBJECTIVE,
             )
         else:
-            index.add(embeddings=[vector],documents=[result],metadatas=[{"task": task["task_name"], "result": result}],ids=[result_id])
+            index.add(
+                embeddings=[vector],
+                documents=[result],
+                metadatas=[{"task": task["task_name"], "result": result}],
+                ids=[result_id],
+            )
         # Step 3: Create new tasks and reprioritize task list
         new_tasks = task_creation_agent(
             OBJECTIVE,
