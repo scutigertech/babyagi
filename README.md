@@ -1,14 +1,13 @@
 <h1 align="center">
- babyagi
-
+Offline babyagi
 </h1>
 
-This is a standalong BabyAGI which uses
+This is a offline BabyAGI which uses
 1. ChromaDB integration 
-2. LLama integration
+2. Easy LLama integration
 
 What did not work?
-1. GPT4all did not work at all. 
+1. GPT4all did not work at all.
 
 
 # Objective
